@@ -4,7 +4,7 @@ import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 
 import com.qz.tracker.R;
-import com.qz.tracker.ui.main.MainFragment;
+import com.qz.tracker.ui.main.MainFragmentv2;
 
 /**
  * @author lg
@@ -19,7 +19,7 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.main_activity);
         if (savedInstanceState == null) {
             getSupportFragmentManager().beginTransaction()
-                    .replace(R.id.container, MainFragment.newInstance())
+                    .replace(R.id.container, MainFragmentv2.newInstance())
                     .commitNow();
         }
     }

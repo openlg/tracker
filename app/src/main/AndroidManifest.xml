@@ -24,6 +24,7 @@
         <activity android:name=".activity.GpsActivity"/>
 
         <service android:name=".service.LocationService" />
+        <service android:name=".service.LocationServicev2" />
 
     </application>
 

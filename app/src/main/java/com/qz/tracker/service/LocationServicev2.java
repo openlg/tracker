@@ -1,6 +1,6 @@
 package com.qz.tracker.service;
 
-import android.app.ActivityManager;
+import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -8,39 +8,52 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
+import android.os.Bundle;
 import android.os.IBinder;
-import android.os.Looper;
+import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.NotificationCompat;
 import android.support.v4.content.LocalBroadcastManager;
 import android.util.Log;
+import android.widget.Toast;
 
-import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationCallback;
-import com.google.android.gms.location.LocationRequest;
 import com.google.android.gms.location.LocationResult;
-import com.google.android.gms.location.LocationServices;
-import com.google.android.gms.tasks.Task;
 import com.qz.tracker.R;
 import com.qz.tracker.activity.MainActivity;
 
 /**
  * @author lg
- * 使用 Google play 获取 location
+ *
  */
-public class LocationService extends Service {
+public class LocationServicev2 extends Service {
 
     private static final long NO_FALLBACK = 0;
-    private final String TAG = LocationService.class.getSimpleName();
+    private final String TAG = LocationServicev2.class.getSimpleName();
     private final int NOTIFICATION_ID = 101;
 
-    private LocationCallback mLocationCallback;
-    private FusedLocationProviderClient mFusedLocationClient;
     private Location mCurrentLocation;
+
+    // The minimum distance to change Updates in meters
+    private static final float MIN_DISTANCE_CHANGE_FOR_UPDATES = 1; // 1 meters
+
+    // The minimum time between updates in milliseconds
+    private static final long MIN_TIME_BW_UPDATES = 1000 * 5 ; // 5 second
+
+    // Flag for GPS status
+    boolean isGPSEnabled = false;
+
+    // Flag for network status
+    boolean isNetworkEnabled = false;
 
     private boolean mRequestingLocationUpdates;
     private NotificationManager mNotificationManager;
     private NotificationChannel mNotificationChannel;
+    private LocationManager locationManager;
+    private LocationListener mLocationCallback;
 
     @Override
     public void onCreate() {
@@ -48,10 +61,11 @@ public class LocationService extends Service {
 
         Log.d(TAG, "Location Service created.");
 
-        mFusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
         mNotificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         mNotificationChannel = new NotificationChannel("com.qz.tracker.channel.id", getString(R.string.app_name), NotificationManager.IMPORTANCE_HIGH);
         mNotificationManager.createNotificationChannel(mNotificationChannel);
+
+        locationManager = (LocationManager) this.getSystemService(Context.LOCATION_SERVICE);
 
         createLocationCallback();
     }
@@ -65,12 +79,9 @@ public class LocationService extends Service {
         // start fetch location
         if( AppConstants.ACTION_LOCATION_FETCH_START.equals(intent.getAction()) ){
 
-            LocationRequest mLocationRequest = intent.getParcelableExtra("location.request");
-
-            requestLocationUpdates(mLocationRequest);
+            requestLocationUpdates();
 
             return super.onStartCommand(intent, flags, startId);
-
         }
 
         // stop fetch location
@@ -81,10 +92,7 @@ public class LocationService extends Service {
     }
 
     @SuppressWarnings("MissingPermission")
-    private void requestLocationUpdates(LocationRequest mLocationRequest) {
-
-        if (mLocationRequest == null)
-            throw new IllegalStateException("Location request can't be null");
+    private void requestLocationUpdates() {
 
         if( mRequestingLocationUpdates ){
             Log.d(TAG, "requestLocationUpdates: location is updates.");
@@ -92,7 +100,60 @@ public class LocationService extends Service {
         }
 
         mRequestingLocationUpdates = true;
-        Task<Void> task = mFusedLocationClient.requestLocationUpdates(mLocationRequest, mLocationCallback, Looper.myLooper());
+        try {
+
+            // Getting GPS status
+            isGPSEnabled = locationManager
+                    .isProviderEnabled(LocationManager.GPS_PROVIDER);
+
+            // Getting network status
+            isNetworkEnabled = locationManager
+                    .isProviderEnabled(LocationManager.NETWORK_PROVIDER);
+
+            if (!isGPSEnabled && !isNetworkEnabled) {
+                // No network provider is enabled
+                Log.e(TAG, "No location provider is enabled");
+            } else {
+
+                if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                        && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                    return;
+                }
+
+                // If GPS enabled, get latitude/longitude using GPS Services
+                if (isGPSEnabled) {
+                    if (mCurrentLocation == null) {
+                        locationManager.requestLocationUpdates(
+                                LocationManager.GPS_PROVIDER,
+                                MIN_TIME_BW_UPDATES,
+                                MIN_DISTANCE_CHANGE_FOR_UPDATES, mLocationCallback);
+                        Log.d(TAG, "Use GPS location provider");
+                        if (locationManager != null) {
+                            mCurrentLocation = locationManager
+                                    .getLastKnownLocation(LocationManager.GPS_PROVIDER);
+                            mLocationCallback.onLocationChanged(mCurrentLocation);
+                        }
+                    }
+                }
+
+                if (isNetworkEnabled) {
+                    locationManager.requestLocationUpdates(
+                            LocationManager.NETWORK_PROVIDER,
+                            MIN_TIME_BW_UPDATES,
+                            MIN_DISTANCE_CHANGE_FOR_UPDATES, mLocationCallback);
+                    Log.d("GPSTracker", "Use network location provider");
+                    if (locationManager != null) {
+                        mCurrentLocation = locationManager
+                                .getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                        mLocationCallback.onLocationChanged(mCurrentLocation);
+                    }
+                }
+
+            }
+        }
+        catch (Exception e) {
+            Log.e("GPSTracker", "Tracker location fail.", e);
+        }
 
         startForeground(NOTIFICATION_ID, getNotification());
     }
@@ -128,10 +189,38 @@ public class LocationService extends Service {
             return;
         }
 
-        mFusedLocationClient.removeLocationUpdates(mLocationCallback);
+        // TODO: remove location update lintener
         mRequestingLocationUpdates = false;
         stopForeground(true);
         stopSelf();
+    }
+
+    /**
+     * Creates a callback for receiving location events.
+     */
+    private void createLocationCallback() {
+        mLocationCallback = new LocationListener() {
+
+            @Override
+            public void onLocationChanged(Location location) {
+                onNewLocation(location);
+            }
+
+            @Override
+            public void onStatusChanged(String provider, int status, Bundle extras) {
+
+            }
+
+            @Override
+            public void onProviderEnabled(String provider) {
+
+            }
+
+            @Override
+            public void onProviderDisabled(String provider) {
+
+            }
+        };
     }
 
     private void onNewLocation(Location location){
@@ -144,24 +233,6 @@ public class LocationService extends Service {
         intent.putExtra(AppConstants.EXTRA_LOCATION, location);
         LocalBroadcastManager.getInstance(getApplicationContext()).sendBroadcast(intent);
 
-        // Update notification content if running as a foreground service.
-        //if (serviceIsRunningInForeground(this)) {
-            //mNotificationManager.notify(NOTIFICATION_ID, getNotification());
-        ///}
-    }
-
-    /**
-     * Creates a callback for receiving location events.
-     */
-    private void createLocationCallback() {
-        mLocationCallback = new LocationCallback() {
-            @Override
-            public void onLocationResult(LocationResult locationResult) {
-                super.onLocationResult(locationResult);
-
-                onNewLocation(locationResult.getLastLocation());
-            }
-        };
     }
 
     @Override
@@ -175,24 +246,4 @@ public class LocationService extends Service {
         return null;
     }
 
-
-
-    /**
-     * Returns true if this is a foreground service.
-     *
-     * @param context The {@link Context}.
-     */
-    public boolean serviceIsRunningInForeground(Context context) {
-        ActivityManager manager = (ActivityManager) context.getSystemService(
-                Context.ACTIVITY_SERVICE);
-        for (ActivityManager.RunningServiceInfo service : manager.getRunningServices(
-                Integer.MAX_VALUE)) {
-            if (getClass().getName().equals(service.service.getClassName())) {
-                if (service.foreground) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
 }
